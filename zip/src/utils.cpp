@@ -1,5 +1,4 @@
-#include <dmsdk/lua/lauxlib.h>
-#include <dmsdk/dlib/log.h>
+#include <dmsdk/sdk.h>
 #include "extension.h"
 #include "utils.h"
 

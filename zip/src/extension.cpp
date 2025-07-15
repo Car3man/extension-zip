@@ -1,8 +1,8 @@
 #include <dmsdk/sdk.h>
 
 #include "extension.h"
-#include "utils.h"
 #include "zip.h"
+#include "utils.h"
 
 class ZipArchive {
 	public:
@@ -20,7 +20,14 @@ static int extension_open(lua_State *L) {
 		zip_archive->buffer = new uint8_t[buffer_size];
 		zip_archive->buffer_size = buffer_size;
 		memcpy(zip_archive->buffer, buffer, buffer_size);
-		zip_archive->zip = zip_open_mem(zip_archive->buffer, zip_archive->buffer_size);
+		zip_archive->zip = zip_stream_open((const char*)zip_archive->buffer, zip_archive->buffer_size, 0, 'r');
+		if (!zip_archive->zip) {
+			delete []zip_archive->buffer;
+			delete zip_archive;
+			lua_pushnil(L);
+			lua_pushstring(L, "Failed to open zip archive from memory buffer");
+			return 2;
+		}
 		lua_pushlightuserdata(L, zip_archive);
 		return 1;
 	}
@@ -45,7 +52,7 @@ static int extension_get_number_of_entries(lua_State *L) {
 	if (utils::check_arg_type(L, "get_number_of_entries", "archive", 1, LUA_TLIGHTUSERDATA)) {
 		ZipArchive *zip_archive = (ZipArchive *)lua_touserdata(L, 1);
 		if (zip_archive) {
-			lua_pushnumber(L, zip_total_entries(zip_archive->zip));
+			lua_pushnumber(L, zip_entries_total(zip_archive->zip));
 			return 1;
 		}
 	}
@@ -59,7 +66,11 @@ static int extension_extract_by_index(lua_State *L) {
 		ZipArchive *zip_archive = (ZipArchive *)lua_touserdata(L, 1);
 		int index = lua_tointeger(L, 2);
 		if (zip_archive) {
-			zip_entry_openbyindex(zip_archive->zip, index);
+			if (zip_entry_openbyindex(zip_archive->zip, index) < 0) {
+				lua_pushnil(L);
+				lua_pushstring(L, "Failed to open zip entry by index");
+				return 2;
+			}
 			lua_newtable(L);
 
 			lua_pushstring(L, zip_entry_name(zip_archive->zip));
@@ -69,20 +80,23 @@ static int extension_extract_by_index(lua_State *L) {
 			lua_pushboolean(L, is_dir);
 			lua_setfield(L, -2, "is_dir");
 
-			size_t buffer_size = zip_entry_size(zip_archive->zip);
+			unsigned long long buffer_size = zip_entry_size(zip_archive->zip);
 			lua_pushinteger(L, buffer_size);
 			lua_setfield(L, -2, "size");
 
 			lua_pushinteger(L, zip_entry_crc32(zip_archive->zip));
 			lua_setfield(L, -2, "checksum");
 
-			if (is_dir == 0) {
+			if (is_dir == 0 && buffer_size > 0) {
 				uint8_t *buffer = new uint8_t[buffer_size];
-				zip_entry_noallocread(zip_archive->zip, (void *)buffer, buffer_size);
-
-				lua_pushlstring(L, (const char *)buffer, buffer_size);
-				lua_setfield(L, -2, "content");
-
+				ssize_t read_size = zip_entry_noallocread(zip_archive->zip, (void *)buffer, (size_t)buffer_size);
+				if (read_size > 0) {
+					lua_pushlstring(L, (const char *)buffer, (size_t)read_size);
+					lua_setfield(L, -2, "content");
+				} else {
+					lua_pushnil(L);
+					lua_setfield(L, -2, "content");
+				}
 				delete []buffer;
 			}
 			zip_entry_close(zip_archive->zip);
